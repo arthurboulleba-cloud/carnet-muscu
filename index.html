@@ -307,6 +307,7 @@ const WORKOUTS = {
     { id: "pullover", n: 3, reps: [12, 12], start: 45, note: "Bras presque tendus." },
     { id: "face-pull", n: 3, reps: [15, 15], start: 0, note: "Coudes hauts, pour la posture." },
     { id: "curl", n: 3, reps: [10, 12], start: 18 },
+    { id: "hammer", n: 3, reps: [10, 12], start: 22 },
   ]},
   "legs": { name: "Legs", exos: [
     { id: "squat", n: 3, reps: [6, 6], start: 80, note: "Dos gainé, au moins à la parallèle." },
@@ -332,6 +333,7 @@ const WORKOUTS = {
     { id: "triceps-bar", n: 3, reps: [10, 12], start: 25 },
     { id: "hammer", n: 3, reps: [12, 12], start: 22, note: "En superset avec l'extension nuque." },
     { id: "overhead-ext", n: 3, reps: [12, 12], start: 0 },
+    { id: "bayesian-curl", n: 3, reps: [10, 12], start: 0, note: "Dos à la poulie, le bras part derrière le corps." },
     { id: "leg-raise", n: 3, reps: [12, 12], start: 0 },
   ]},
 };
@@ -397,6 +399,12 @@ const LIBRARY = {
   "incline-curl": { name: "Curl incliné haltères", step: 1, rest: 60 },
   "preacher-curl": { name: "Curl pupitre", step: 1, rest: 60 },
   "hammer": { name: "Curl marteau", step: 1, rest: 60 },
+  "bayesian-curl": { name: "Curl bayésien", step: 1, rest: 60 },
+  "cable-curl": { name: "Curl à la poulie", step: 1, rest: 60 },
+  "rope-hammer": { name: "Curl marteau à la corde", step: 1, rest: 60 },
+  "concentration-curl": { name: "Curl concentré", step: 1, rest: 60 },
+  "spider-curl": { name: "Spider curl", step: 1, rest: 60 },
+  "reverse-curl": { name: "Curl inversé", step: 1, rest: 60 },
   "triceps-bar": { name: "Triceps barre", step: 2.5, rest: 60 },
   "triceps-rope": { name: "Triceps corde", step: 1, rest: 60 },
   "triceps-uni": { name: "Triceps poulie unilatéral", step: 1, rest: 60 },
@@ -466,7 +474,8 @@ let outbox = store("carnet-outbox") || {};
 const pendingOf = (prefix) => Object.keys(outbox).filter((p) => p.startsWith(prefix));
 function mergeLogs(server) {
   const byId = new Map(server.map((l) => [l.id, l]));
-  for (const p of pendingOf("logs/")) byId.set(p.slice(5), { id: p.slice(5), ...outbox[p] });
+  // A queued null is a deletion waiting to be sent
+  for (const p of pendingOf("logs/")) outbox[p] === null ? byId.delete(p.slice(5)) : byId.set(p.slice(5), { id: p.slice(5), ...outbox[p] });
   return [...byId.values()].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
 }
 function mergeWeights(server) {
@@ -753,7 +762,8 @@ const VIEWS = {
     const rows = state.logs.map((l) => `<button class="row" data-go-log="${l.id}"><span class="rn">${esc(NAMES[l.seance] || l.seance)}
       <span class="rs">${cap(fmt(l.date, { weekday: "long", day: "numeric", month: "short" }))}, ${l.exos.reduce((a, e) => a + e.sets.length, 0)} séries</span></span><span class="chev">${I.chev}</span></button>`).join("");
     return { body: `${head("Séances", "Toutes tes séances terminées.")}${banner()}
-      ${rows ? `<div class="list">${rows}</div>` : `<p class="foot">Tes séances terminées apparaîtront ici.</p>`}` };
+      ${rows ? `<div class="list">${rows}</div>
+      <p class="foot"><button class="textbtn" data-wipe>Effacer tous mes progrès</button><br>Supprime toutes les séances et les records. Ton poids est gardé.</p>` : `<p class="foot">Tes séances terminées apparaîtront ici.</p>`}` };
   },
 
   log(r) {
@@ -762,7 +772,8 @@ const VIEWS = {
     const exos = l.exos.map((e) => `<section class="exo"><h2 class="exo-name">${esc(lib(e.id).name)}</h2>
       <div class="tbl">${e.sets.map((s, j) => `<div class="tr bw"><span class="n">${j + 1}</span><span class="prev" style="color:var(--text)">${setTxt(e.id, s)}</span><span></span>
         <span class="tick" aria-hidden="true" style="background:var(--inv);box-shadow:none;color:var(--on-inv)">${I.check}</span></div>`).join("")}</div></section>`).join("");
-    return { body: `${head(esc(NAMES[l.seance] || l.seance), cap(fmt(l.date, { weekday: "long", day: "numeric", month: "long", year: "numeric" })))}${exos}` };
+    return { body: `${head(esc(NAMES[l.seance] || l.seance), cap(fmt(l.date, { weekday: "long", day: "numeric", month: "long", year: "numeric" })))}${exos}
+      <p class="foot"><button class="textbtn" data-del-log="${l.id}">Supprimer cette séance</button></p>` };
   },
 };
 
@@ -865,7 +876,7 @@ function flush() {
     for (const path of Object.keys(outbox)) {
       const data = outbox[path];
       // A write can hang instead of failing when the network drops; give up after 8 s and retry later
-      try { await Promise.race([db.doc(path).set(data), new Promise((_, no) => setTimeout(() => no(new Error("timeout")), 8000))]); }
+      try { await Promise.race([data === null ? db.doc(path).delete() : db.doc(path).set(data), new Promise((_, no) => setTimeout(() => no(new Error("timeout")), 8000))]); }
       catch { break; }
       if (outbox[path] === data) { delete outbox[path]; store("carnet-outbox", outbox); sent++; }
     }
@@ -875,6 +886,16 @@ function flush() {
   return flushing;
 }
 const OFFLINE_SAVED = "Enregistrée sur ce téléphone, envoi dès que la connexion revient";
+// Deleting a session also drops it from records and charts, which are computed from the logs
+function deleteLogs(ids) {
+  for (const id of ids) queue(`logs/${id}`, null);
+  serverLogs = serverLogs.filter((l) => !ids.includes(l.id));
+  state.logs = mergeLogs(serverLogs); saveCache();
+}
+function wipeProgress() {
+  deleteLogs(state.logs.map((l) => l.id));
+  state.baseline = {}; queue("meta/records", { records: {} }); saveCache();
+}
 function saveSplit() { store("carnet-split", state.split); persist("meta/split", state.split); }
 function syncWorkout(sid) {
   const d = getDraft(sid);
@@ -900,11 +921,29 @@ async function finish(sid) {
 // Rest timer, shown in the floating bar during a workout
 let rest = null, restTimer = null;
 const restTxt = () => { const left = rest ? Math.max(0, Math.ceil((rest.end - Date.now()) / 1000)) : 0; return `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`; };
-function startRest(sec) { rest = { end: Date.now() + sec * 1000 }; clearInterval(restTimer); restTimer = setInterval(tickRest, 500); }
+function startRest(sec) { primeAudio(); keepAwake(); rest = { end: Date.now() + sec * 1000 }; clearInterval(restTimer); restTimer = setInterval(tickRest, 500); }
+// iPhone web apps cannot vibrate or use the Dynamic Island: end of rest = two short beeps, and the screen stays on
+let audio = null, wake = null;
+function primeAudio() { try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); if (audio.state === "suspended") audio.resume(); } catch {} }
+function beep() {
+  if (!audio) return;
+  try {
+    for (const t of [0, 0.25]) {
+      const o = audio.createOscillator(), g = audio.createGain(), at = audio.currentTime + t;
+      o.frequency.value = 880; g.gain.setValueAtTime(0.0001, at);
+      g.gain.exponentialRampToValueAtTime(0.3, at + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, at + 0.18);
+      o.connect(g).connect(audio.destination); o.start(at); o.stop(at + 0.2);
+    }
+  } catch {}
+}
+async function keepAwake() {
+  try { if (!wake && "wakeLock" in navigator) { wake = await navigator.wakeLock.request("screen"); wake.addEventListener("release", () => { wake = null; }); } } catch {}
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && rest) keepAwake(); });
 function stopRest() { rest = null; clearInterval(restTimer); }
 function tickRest() {
   if (!rest) return;
-  if (Date.now() >= rest.end) { try { navigator.vibrate?.([80, 60, 80]); } catch {} stopRest(); if (cur().v === "seance") render(); return; }
+  if (Date.now() >= rest.end) { try { navigator.vibrate?.([80, 60, 80]); } catch {} beep(); stopRest(); if (cur().v === "seance") render(); return; }
   const el = $("#rest-t"); if (el) el.textContent = restTxt();
 }
 
@@ -920,6 +959,12 @@ document.addEventListener("click", (ev) => {
   if (ds.go) { go({ v: ds.go }); return; }
   if (ds.goExo) { go({ v: "exo", id: ds.goExo }); return; }
   if (ds.goLog) { go({ v: "log", id: ds.goLog }); return; }
+  if (ds.delLog || "wipe" in ds) {
+    if (!b.classList.contains("armed")) { b.classList.add("armed"); b.textContent = "Touche encore pour confirmer"; return; }
+    if (ds.delLog) { deleteLogs([ds.delLog]); back(); flash("Séance supprimée"); }
+    else { wipeProgress(); render(); flash("Progrès effacés"); }
+    return;
+  }
   if (ds.openSeance) { go({ v: "seance", sid: ds.openSeance }); return; }
   if (ds.activate) {
     if (ds.activate === state.split.active) return;
